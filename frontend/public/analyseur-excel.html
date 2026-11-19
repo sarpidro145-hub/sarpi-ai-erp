@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Analyseur Excel — Tableaux croisés</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root{font-family:Arial,Helvetica,sans-serif;color:#172b4d;background:#f4f7fb}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1180px;margin:32px auto;padding:0 18px}.hero,.panel,.stat{background:#fff;border:1px solid #e3e9f2;border-radius:12px;padding:20px;margin-bottom:16px}.hero{background:linear-gradient(120deg,#eff6ff,#fff)}h1{margin:0 0 8px;font-size:26px}h2{font-size:18px;margin:0 0 14px}p{color:#667085}.button{background:#2563eb;color:#fff;border:0;border-radius:8px;padding:11px 16px;font-weight:bold;cursor:pointer}.button.green{background:#0f766e}.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:12px}.controls label{font-size:13px;color:#667085}select,input[type=search]{display:block;width:100%;margin-top:6px;padding:10px;border:1px solid #d5dce7;border-radius:8px;background:#fff;color:#172b4d}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}.stat{margin:0}.stat span{color:#667085;font-size:13px}.stat strong{display:block;font-size:23px;margin-top:8px}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid #dce3ed;background:#f5f8fc;border-radius:7px;padding:7px 10px;cursor:pointer;color:#172b4d}.chip:hover{background:#dbeafe}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:10px;border-bottom:1px solid #e5eaf2}thead,tfoot{background:#f5f8fc}th:first-child{text-align:left}td,th:not(:first-child){text-align:right}.scroll{overflow:auto}.note{font-size:13px;color:#667085}.error{color:#b42318}.hidden{display:none!important}@media(max-width:600px){.wrap{margin:16px auto;padding:0 10px}.hero,.panel{padding:15px}h1{font-size:22px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <section class="hero">
+    <h1>Analyseur Excel — Tableaux croisés & situations</h1>
+    <p>Importez un classeur Excel, créez des synthèses et exportez les résultats. Les données sont analysées dans votre navigateur.</p>
+    <button class="button" id="choose">Importer un fichier Excel</button>
+    <input id="file" type="file" accept=".xlsx,.xls,.xlsm,.xlsb,.csv" hidden>
+    <span id="filename" style="margin-left:10px"></span>
+    <div id="sheetline" class="hidden" style="margin-top:14px">Feuille : <select id="sheet" style="display:inline-block;width:auto;margin:0 0 0 8px"></select></div>
+    <p id="message" class="error"></p>
+  </section>
+  <section id="workspace" class="hidden">
+    <div class="stats" id="stats"></div>
+    <section class="panel">
+      <h2>Construire une situation</h2>
+      <div class="controls">
+        <label>Lignes<select id="row"></select></label>
+        <label>Colonnes (facultatif)<select id="column"></select></label>
+        <label>Valeur à calculer<select id="measure"></select></label>
+        <label>Calcul<select id="operation"><option value="sum">Somme</option><option value="count">Nombre</option><option value="average">Moyenne</option><option value="min">Minimum</option><option value="max">Maximum</option></select></label>
+      </div>
+      <label style="display:block;margin-top:12px;color:#667085;font-size:13px">Rechercher / filtrer<input id="filter" type="search" placeholder="Rechercher dans toutes les colonnes…"></label>
+    </section>
+    <section class="panel"><h2>Combinaisons suggérées</h2><div id="suggestions" class="chips"></div><p id="more" class="note"></p></section>
+    <section class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><h2 style="margin-bottom:4px">Tableau croisé dynamique</h2><span id="caption" class="note"></span></div><button id="export" class="button green">Exporter en CSV</button></div>
+      <div id="table" class="scroll" style="margin-top:12px"></div>
+    </section>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let book, data = [], fields = [], numeric = [], categories = [], currentPivot;
+  const text = v => v === null || v === undefined || v === '' ? '(vide)' : String(v);
+  const num = v => { if(typeof v === 'number') return Number.isFinite(v) ? v : null; if(typeof v !== 'string'||!v.trim()) return null; const s=v.trim().replace(/\s/g,'').replace(',', '.').replace(/[€$£]/g,''); if(!/^-?\d+(\.\d+)?$/.test(s)) return null; const n=Number(s); return Number.isFinite(n)?n:null; };
+  const fmt = n => new Intl.NumberFormat('fr-FR',{maximumFractionDigits:2}).format(n||0);
+  $('choose').onclick=()=>$('file').click();
+  $('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;$('message').textContent='';try{if(!window.XLSX)throw Error('La bibliothèque Excel ne s’est pas chargée. Connectez-vous à Internet puis rechargez cette page.');book=XLSX.read(await f.arrayBuffer(),{type:'array',cellDates:true});if(!book.SheetNames.length)throw Error('Aucune feuille trouvée.');$('filename').textContent='📄 '+f.name;$('sheet').innerHTML=book.SheetNames.map((s,i)=>`<option value="${i}">${esc(s)}</option>`).join('');$('sheetline').classList.remove('hidden');loadSheet(0);}catch(err){$('message').textContent=err.message||'Impossible de lire ce fichier Excel.';}e.target.value='';};
+  $('sheet').onchange=e=>loadSheet(Number(e.target.value));
+  function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function loadSheet(i){data=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[i]],{defval:'',raw:true,blankrows:false}).filter(r=>Object.values(r).some(v=>String(v).trim()!==''));if(!data.length){$('message').textContent='Cette feuille est vide ou ne contient pas de ligne d’en-têtes.';$('workspace').classList.add('hidden');return;}fields=Object.keys(data[0]);numeric=fields.filter(k=>data.filter(r=>num(r[k])!==null).length>=Math.max(1,data.length*.6));categories=fields.filter(k=>!numeric.includes(k));$('row').innerHTML=fields.map((f,i)=>`<option value="${esc(f)}">${esc(f)}</option>`).join('');$('measure').innerHTML='<option value="">Choisir un champ numérique</option>'+numeric.map(f=>`<option value="${esc(f)}">${esc(f)}</option>`).join('');$('column').innerHTML='<option value="">Aucun</option>'+categories.map(f=>`<option value="${esc(f)}">${esc(f)}</option>`).join('');$('row').value=categories[0]||fields[0];$('measure').value=numeric[0]||'';$('column').value='';$('filter').value='';$('workspace').classList.remove('hidden');render();}
+  function filtered(){const q=$('filter').value.trim().toLocaleLowerCase('fr');return q?data.filter(r=>fields.some(f=>text(r[f]).toLocaleLowerCase('fr').includes(q))):data;}
+  function render(){const rows=filtered(), rowField=$('row').value,colField=$('column').value,measure=$('measure').value,op=$('operation').value;$('stats').innerHTML=[['Lignes analysées',rows.length],['Colonnes',fields.length],['Champs numériques',numeric.length],['Combinaisons suggérées',Math.max(0,categories.length*(categories.length+1)/2)*numeric.length]].map(([a,b])=>`<div class="stat"><span>${a}</span><strong>${fmt(b)}</strong></div>`).join('');const combinations=[];categories.forEach(a=>{combinations.push([a,'']);categories.forEach(b=>{if(a!==b)combinations.push([a,b]);});});const unique=[...new Map(combinations.map(x=>[x.join('|'),x])).values()];const visible=unique.slice(0,100);$('suggestions').innerHTML=visible.map(([a,b])=>`<button class="chip" data-row="${esc(a)}" data-col="${esc(b)}">${esc(a)}${b?' × '+esc(b):' (détail)'}</button>`).join('');$('more').textContent=unique.length>100?`Affichage des 100 premières combinaisons sur ${unique.length}.`:'';$('suggestions').querySelectorAll('button').forEach(btn=>btn.onclick=()=>{$('row').value=btn.dataset.row;$('column').value=btn.dataset.col;render();});if(!measure){$('caption').textContent='Sélectionnez un champ numérique.';$('table').innerHTML='<p class="note">Aucune colonne numérique détectée. Vérifiez la feuille importée.</p>';currentPivot=null;return;}if(!rows.length){$('caption').textContent='Aucune ligne pour ce filtre.';$('table').innerHTML='';currentPivot=null;return;}
+    const colValues=colField?[...new Set(rows.map(r=>text(r[colField])))].sort((a,b)=>a.localeCompare(b,'fr')):['Total'];const groups=new Map();rows.forEach(r=>{const rk=text(r[rowField]),ck=colField?text(r[colField]):'Total';if(!groups.has(rk))groups.set(rk,new Map());const m=groups.get(rk);if(!m.has(ck))m.set(ck,[]);const v=num(r[measure]);if(v!==null)m.get(ck).push(v);});const calc=vs=>!vs?.length?0:op==='count'?vs.length:op==='average'?vs.reduce((a,b)=>a+b,0)/vs.length:op==='min'?Math.min(...vs):op==='max'?Math.max(...vs):vs.reduce((a,b)=>a+b,0);const result=[...groups].sort((a,b)=>a[0].localeCompare(b[0],'fr')).map(([key,m])=>({key,values:colValues.map(c=>calc(m.get(c)||[]))}));result.forEach(r=>r.total=r.values.reduce((a,b)=>a+b,0));const totals=colValues.map((_,i)=>result.reduce((a,r)=>a+r.values[i],0));currentPivot={rowField,colValues,result,totals,grand:totals.reduce((a,b)=>a+b,0)};$('caption').textContent=`${{sum:'Somme',count:'Nombre',average:'Moyenne',min:'Minimum',max:'Maximum'}[op]} de ${measure} — ${rows.length} lignes`;$('table').innerHTML=`<table><thead><tr><th>${esc(rowField)}</th>${colValues.map(c=>`<th>${esc(c)}</th>`).join('')}<th>Total</th></tr></thead><tbody>${result.map(r=>`<tr><th>${esc(r.key)}</th>${r.values.map(v=>`<td>${fmt(v)}</td>`).join('')}<td><b>${fmt(r.total)}</b></td></tr>`).join('')}</tbody><tfoot><tr><th>Total général</th>${totals.map(v=>`<td>${fmt(v)}</td>`).join('')}<td>${fmt(currentPivot.grand)}</td></tr></tfoot></table>`;
+  }
+  ['row','column','measure','operation','filter'].forEach(id=>$(id).addEventListener(id==='filter'?'input':'change',()=>{if(id==='row'){$('column').value===''+$('row').value&&($('column').value='');$('column').innerHTML='<option value="">Aucun</option>'+categories.filter(f=>f!==$('row').value).map(f=>`<option value="${esc(f)}">${esc(f)}</option>`).join('');}render();}));
+  $('export').onclick=()=>{if(!currentPivot)return;const p=currentPivot,table=[[p.rowField,...p.colValues,'Total'],...p.result.map(r=>[r.key,...r.values,r.total]),['Total général',...p.totals,p.grand]];const csv='\ufeff'+table.map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='tableau-croise.csv';a.click();URL.revokeObjectURL(a.href);};
+})();
+</script>
+</body>
+</html>
